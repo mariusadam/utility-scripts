@@ -20,10 +20,10 @@
     If present, skip zero-byte files when comparing hashes.
 
 .EXAMPLE
-    .\CompareDirectories-Lite.ps1 -Source C:\src -Destination D:\dst
+    .\Get-CompareDirectoriesReport.ps1 -Source C:\src -Destination D:\dst
 
 .EXAMPLE
-    .\CompareDirectories-Lite.ps1 -Source C:\src -Destination D:\dst -Hash
+    .\Get-CompareDirectoriesReport.ps1 -Source C:\src -Destination D:\dst -Hash
 
 .NOTES
     Exit codes:
@@ -48,7 +48,9 @@ param(
 
     [switch]$WriteJson,
 
-    [string]$OutFile
+    [string]$OutFile,
+
+    [string]$ExcludeExtensions = "v1_indexcache;pdb;exe"
 )
 
 # Normalize Source and Destination to absolute paths
@@ -71,10 +73,22 @@ $Destination = $Destination.TrimEnd('\')
 
 function Get-RelativeFileMap {
     param(
-        [string]$Root
+        [string]$Root,
+        [string]$ExcludeExtensions
     )
     $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
-    Get-ChildItem -LiteralPath $rootFull -Recurse -File -ErrorAction Stop | ForEach-Object {
+    # Build a normalized exclusion set (extensions without leading dots, lowercase)
+    $excludeSet = @()
+    if ($ExcludeExtensions) {
+        $excludeSet = $ExcludeExtensions -split ';' | ForEach-Object { $_.Trim().TrimStart('.') } | Where-Object { $_ -ne '' } | ForEach-Object { $_.ToLowerInvariant() }
+    }
+
+    Get-ChildItem -LiteralPath $rootFull -Recurse -File -ErrorAction Stop | Where-Object {
+        if ($excludeSet.Count -eq 0) { return $true }
+        $ext = [System.IO.Path]::GetExtension($_.Name).TrimStart('.')
+        if (-not $ext) { $ext = '' }
+        -not ($excludeSet -contains $ext.ToLowerInvariant())
+    } | ForEach-Object {
         $rel = $_.FullName.Substring($rootFull.Length).TrimStart('\')
         [PSCustomObject]@{
             RelativePath = $rel
@@ -86,10 +100,10 @@ function Get-RelativeFileMap {
 
 try {
     Write-Host "Building file map for Source: $Source"
-    $srcFiles = Get-RelativeFileMap -Root $Source | Group-Object -Property RelativePath -AsHashTable -AsString
+    $srcFiles = Get-RelativeFileMap -Root $Source -ExcludeExtensions $ExcludeExtensions | Group-Object -Property RelativePath -AsHashTable -AsString
     Write-Host "Built file map for Source ($($srcFiles.Count) files)."
     Write-Host "Building file map for Destination: $Destination"
-    $dstFiles = Get-RelativeFileMap -Root $Destination | Group-Object -Property RelativePath -AsHashTable -AsString
+    $dstFiles = Get-RelativeFileMap -Root $Destination -ExcludeExtensions $ExcludeExtensions | Group-Object -Property RelativePath -AsHashTable -AsString
     Write-Host "Built file map for Destination ($($dstFiles.Count) files)."
 } catch {
     Write-Error "Failed to enumerate files: $_"
